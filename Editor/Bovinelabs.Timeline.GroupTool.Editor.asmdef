@@ -1,0 +1,23 @@
+{
+  "name": "Bovinelabs.Timeline.GroupTool.Editor",
+  "rootNamespace": "Bovinelabs.Timeline.GroupTool.Editor",
+  "references": [],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [
+    "UnityEngine.dll",
+    "UnityEngine.CoreModule.dll",
+    "UnityEngine.PlayablesModule.dll",
+    "UnityEngine.TimelineModule.dll"
+  ],
+  "autoReferenced": true,
+  "defineConstraints": [
+    "UNITY_EDITOR"
+  ],
+  "versionDefines": [],
+  "noEngineReferences": false
+}
