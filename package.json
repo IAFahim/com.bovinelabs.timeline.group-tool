@@ -1,22 +1,14 @@
 {
   "name": "com.bovinelabs.timeline.group-tool",
   "displayName": "BovineLabs Timeline Group Tool",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "unity": "2022.3",
-  "description": "Split and join Timeline GroupTracks. Context-menu driven: right-click PlayableDirector inspector to split groups into separate timelines or join multiple timelines back into one.",
+  "unityRelease": "0f1",
+  "description": "Lossless split and join for Timeline GroupTracks. Preserves markers, signals, curves, bindings, and nested groups. Non-destructive with full undo.",
   "dependencies": {
-    "com.unity.timeline": "1.7.0"
+    "com.unity.timeline": "1.7.6"
   },
-  "keywords": [
-    "timeline",
-    "group",
-    "split",
-    "join",
-    "merge",
-    "collapse",
-    "expand",
-    "DOTS"
-  ],
+  "keywords": ["timeline", "group", "split", "join", "merge", "non-destructive"],
   "author": {
     "name": "BovineLabs",
     "url": "https://github.com/IAFahim"

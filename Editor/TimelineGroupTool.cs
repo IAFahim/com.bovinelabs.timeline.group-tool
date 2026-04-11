@@ -1,276 +1,278 @@
-using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Playables;
 using UnityEngine.Timeline;
 
-public static class TimelineGroupTool
+namespace BovineLabs.Timeline.Editor
 {
-    const string ContextMenu = "CONTEXT/PlayableDirector/";
-
-    [MenuItem(ContextMenu + "Split Groups")]
-    static void SplitFromInspector(MenuCommand command)
+    public static class TimelineGroupTool
     {
-        if (command.context is PlayableDirector director)
-            Expand(director);
-    }
+        const string SplitPath = "CONTEXT/PlayableDirector/Split Groups";
+        const string JoinPath = "CONTEXT/PlayableDirector/Join Timelines";
 
-    [MenuItem(ContextMenu + "Split Groups", true)]
-    static bool CanSplitInspector(MenuCommand command)
-    {
-        return command.context is PlayableDirector d && d.playableAsset is TimelineAsset tl
-            && tl.GetRootTracks().Any(t => t is GroupTrack);
-    }
-
-    [MenuItem(ContextMenu + "Join Timelines")]
-    static void JoinFromInspector(MenuCommand command)
-    {
-        var selected = Selection.gameObjects
-            .Select(go => go.GetComponent<PlayableDirector>())
-            .Where(d => d != null && d.playableAsset is TimelineAsset)
-            .ToArray();
-
-        if (selected.Length >= 2)
-            Collapse(selected);
-    }
-
-    [MenuItem(ContextMenu + "Join Timelines", true)]
-    static bool CanJoinInspector(MenuCommand command)
-    {
-        return command.context is PlayableDirector
-            && Selection.gameObjects.Length >= 2
-            && Selection.gameObjects.All(go => go.GetComponent<PlayableDirector>()?.playableAsset is TimelineAsset);
-    }
-
-    public static void Expand(PlayableDirector source)
-    {
-        var sourceAsset = source.playableAsset as TimelineAsset;
-        if (sourceAsset == null) return;
-
-        var directory = AssetDirectory(sourceAsset);
-        var bindings = CollectBindings(source);
-        var groups = sourceAsset.GetRootTracks().Where(g => g is GroupTrack).ToList();
-
-        if (groups.Count == 0)
+        [MenuItem(SplitPath)]
+        static void SplitFromInspector(MenuCommand cmd)
         {
-            Debug.LogWarning("[TimelineGroupTool] No GroupTracks found in timeline.");
-            return;
+            if (cmd.context is PlayableDirector d) Expand(d, false);
         }
 
-        var parent = source.gameObject.transform.parent;
-        var siblingIndex = source.gameObject.transform.GetSiblingIndex();
-
-        foreach (var group in groups)
+        [MenuItem(SplitPath, true)]
+        static bool CanSplit(MenuCommand cmd)
         {
-            var children = group.GetChildTracks().ToList();
-            if (children.Count == 0) continue;
-
-            var (asset, trackMap) = CreateExpandedTimeline(children, group.name);
-            var path = AssetDatabase.GenerateUniqueAssetPath($"{directory}/{group.name}.playable");
-
-            AssetDatabase.CreateAsset(asset, path);
-
-            foreach (var child in children)
-                CloneClips(child, trackMap[child], asset);
-
-            AssetDatabase.SaveAssets();
-
-            var go = new GameObject(group.name);
-            Undo.RegisterCreatedObjectUndo(go, "Split Groups");
-            go.transform.SetParent(parent);
-            go.transform.SetSiblingIndex(++siblingIndex);
-
-            var dir = go.AddComponent<PlayableDirector>();
-            dir.playableAsset = asset;
-            ApplyBindings(dir, bindings, trackMap);
+            return cmd.context is PlayableDirector d && d.playableAsset is TimelineAsset tl
+                && tl.GetRootTracks().Any(t => t is GroupTrack);
         }
 
-        EditorSceneManager.SaveOpenScenes();
-    }
-
-    public static void Collapse(params PlayableDirector[] sources)
-    {
-        var valid = sources.Where(s => s?.playableAsset is TimelineAsset).ToArray();
-        if (valid.Length == 0) return;
-
-        var directory = CommonDirectory(valid);
-        var (merged, allBindings) = CreateCollapsedTimeline(valid);
-        var path = AssetDatabase.GenerateUniqueAssetPath($"{directory}/Timeline.playable");
-
-        AssetDatabase.CreateAsset(merged, path);
-
-        var groupList = merged.GetRootTracks().ToList();
-        for (int i = 0; i < groupList.Count && i < valid.Length; i++)
+        [MenuItem(JoinPath)]
+        static void JoinFromInspector(MenuCommand cmd)
         {
-            var sourceTracks = ((TimelineAsset)valid[i].playableAsset).GetRootTracks().ToList();
-            var childTracks = groupList[i].GetChildTracks().ToList();
-
-            for (int j = 0; j < sourceTracks.Count && j < childTracks.Count; j++)
-                CloneClips(sourceTracks[j], childTracks[j], merged);
+            var dirs = Selection.gameObjects
+               .Select(go => go.GetComponent<PlayableDirector>())
+               .Where(d => d != null && d.playableAsset is TimelineAsset)
+               .ToArray();
+            if (dirs.Length >= 2) Collapse(dirs);
         }
 
-        AssetDatabase.SaveAssets();
-
-        var parent = valid[0].gameObject.transform.parent;
-        var siblingIndex = valid[0].gameObject.transform.GetSiblingIndex();
-
-        var mergedGO = new GameObject("Timeline");
-        Undo.RegisterCreatedObjectUndo(mergedGO, "Join Timelines");
-        mergedGO.transform.SetParent(parent);
-        mergedGO.transform.SetSiblingIndex(siblingIndex);
-
-        var mergedDir = mergedGO.AddComponent<PlayableDirector>();
-        mergedDir.playableAsset = merged;
-
-        foreach (var kv in allBindings)
-            if (kv.Value != null)
-                mergedDir.SetGenericBinding(kv.Key, kv.Value);
-
-        var assetPaths = valid
-            .Select(s => AssetDatabase.GetAssetPath(s.playableAsset))
-            .Where(p => !string.IsNullOrEmpty(p))
-            .Distinct()
-            .ToList();
-
-        foreach (var source in valid)
-            Undo.DestroyObjectImmediate(source.gameObject);
-
-        foreach (var assetPath in assetPaths)
-            AssetDatabase.DeleteAsset(assetPath);
-
-        AssetDatabase.SaveAssets();
-        EditorSceneManager.SaveOpenScenes();
-
-        Selection.activeGameObject = mergedGO;
-    }
-
-    static (TimelineAsset asset, Dictionary<TrackAsset, TrackAsset> map) CreateExpandedTimeline(
-        List<TrackAsset> children, string name)
-    {
-        var asset = ScriptableObject.CreateInstance<TimelineAsset>();
-        asset.name = name;
-
-        var map = new Dictionary<TrackAsset, TrackAsset>();
-        foreach (var child in children)
-            map[child] = asset.CreateTrack(child.GetType(), null, child.name);
-
-        return (asset, map);
-    }
-
-    static (TimelineAsset asset, Dictionary<TrackAsset, UnityEngine.Object> bindings) CreateCollapsedTimeline(
-        PlayableDirector[] sources)
-    {
-        var merged = ScriptableObject.CreateInstance<TimelineAsset>();
-        merged.name = "Timeline";
-
-        var allBindings = new Dictionary<TrackAsset, UnityEngine.Object>();
-
-        foreach (var source in sources)
+        [MenuItem(JoinPath, true)]
+        static bool CanJoin(MenuCommand cmd)
         {
-            var sourceAsset = (TimelineAsset)source.playableAsset;
-            var group = merged.CreateTrack<GroupTrack>(null);
-            group.name = sourceAsset.name;
+            return Selection.gameObjects.Length >= 2
+                && Selection.gameObjects.All(go => go.GetComponent<PlayableDirector>()?.playableAsset is TimelineAsset);
+        }
 
-            var sourceBindings = CollectBindings(source);
-            foreach (var track in sourceAsset.GetRootTracks())
+        public static void Expand(PlayableDirector source, bool deleteSourceGroups = false)
+        {
+            var sourceAsset = source.playableAsset as TimelineAsset;
+            if (sourceAsset == null) return;
+
+            Undo.IncrementCurrentGroup();
+            var undoGroup = Undo.GetCurrentGroup();
+
+            var directory = GetDirectory(sourceAsset);
+            var parent = source.transform.parent;
+            var siblingIndex = source.transform.GetSiblingIndex();
+            var groups = sourceAsset.GetRootTracks().Where(t => t is GroupTrack).ToList();
+
+            try
             {
-                var cloned = merged.CreateTrack(track.GetType(), group, track.name);
-                if (sourceBindings.TryGetValue(track, out var binding))
-                    allBindings[cloned] = binding;
+                AssetDatabase.StartAssetEditing();
+                for (int i = 0; i < groups.Count; i++)
+                {
+                    var group = (GroupTrack)groups[i];
+                    EditorUtility.DisplayProgressBar("Splitting Timeline", group.name, i / (float)groups.Count);
+
+                    var newAsset = CloneTimelineWithOnly(group);
+                    var path = AssetDatabase.GenerateUniqueAssetPath(
+                        $"{directory}/{sourceAsset.name}_{group.name}.playable");
+                    AssetDatabase.CreateAsset(newAsset, path);
+
+                    var go = new GameObject(group.name);
+                    Undo.RegisterCreatedObjectUndo(go, "Split Groups");
+                    go.transform.SetParent(parent);
+                    go.transform.SetSiblingIndex(++siblingIndex);
+
+                    var dir = go.AddComponent<PlayableDirector>();
+                    Undo.RegisterCreatedObjectUndo(dir, "Split Groups");
+                    dir.playableAsset = newAsset;
+                    CopyDirectorSettings(source, dir);
+                    TransferBindings(source, dir, group);
+                }
+
+                if (deleteSourceGroups)
+                {
+                    foreach (var g in groups)
+                        sourceAsset.DeleteTrack(g);
+                    EditorUtility.SetDirty(sourceAsset);
+                }
+            }
+            finally
+            {
+                AssetDatabase.StopAssetEditing();
+                EditorUtility.ClearProgressBar();
+                AssetDatabase.SaveAssets();
+                EditorSceneManager.MarkSceneDirty(source.gameObject.scene);
+                Undo.CollapseUndoOperations(undoGroup);
             }
         }
 
-        return (merged, allBindings);
-    }
-
-    static void CloneClips(TrackAsset source, TrackAsset target, TimelineAsset targetAsset)
-    {
-        foreach (var clip in source.GetClips())
+        public static void Collapse(params PlayableDirector[] sources)
         {
-            var newClip = InvokeCreateDefaultClip(target);
-            if (newClip == null) continue;
+            if (sources.Length < 2) return;
+            if (!EditorUtility.DisplayDialog("Join Timelines",
+                $"Merge {sources.Length} timelines into one? Sources will be moved to backup, not deleted.",
+                "Join", "Cancel")) return;
 
-            CloneClipAsset(clip, newClip, targetAsset);
-            CopyClipProperties(clip, newClip);
+            Undo.IncrementCurrentGroup();
+            var undoGroup = Undo.GetCurrentGroup();
+
+            var first = sources[0];
+            var directory = GetDirectory(first.playableAsset);
+            var merged = ScriptableObject.CreateInstance<TimelineAsset>();
+            merged.name = $"{first.gameObject.name}_Merged";
+
+            var bindingMap = new Dictionary<TrackAsset, Object>();
+
+            try
+            {
+                AssetDatabase.StartAssetEditing();
+                foreach (var src in sources)
+                {
+                    var srcAsset = (TimelineAsset)src.playableAsset;
+                    var group = merged.CreateTrack<GroupTrack>(null, srcAsset.name);
+
+                    foreach (var rootTrack in srcAsset.GetRootTracks())
+                    {
+                        var clone = CloneTrackRecursive(rootTrack, merged, group);
+                        var binding = src.GetGenericBinding(rootTrack);
+                        if (binding != null) bindingMap[clone] = binding;
+
+                        foreach (var child in rootTrack.GetChildTracks())
+                            TransferChildBindings(src, child, bindingMap);
+                    }
+                }
+
+                var path = AssetDatabase.GenerateUniqueAssetPath($"{directory}/{merged.name}.playable");
+                AssetDatabase.CreateAsset(merged, path);
+
+                var parent = first.transform.parent;
+                var siblingIndex = first.transform.GetSiblingIndex();
+                var go = new GameObject(merged.name);
+                Undo.RegisterCreatedObjectUndo(go, "Join Timelines");
+                go.transform.SetParent(parent);
+                go.transform.SetSiblingIndex(siblingIndex);
+
+                var dir = go.AddComponent<PlayableDirector>();
+                dir.playableAsset = merged;
+                CopyDirectorSettings(first, dir);
+
+                foreach (var kv in bindingMap)
+                    dir.SetGenericBinding(kv.Key, kv.Value);
+
+                BackupAndDisableSources(sources);
+                Selection.activeGameObject = go;
+            }
+            finally
+            {
+                AssetDatabase.StopAssetEditing();
+                AssetDatabase.SaveAssets();
+                EditorSceneManager.MarkSceneDirty(first.gameObject.scene);
+                Undo.CollapseUndoOperations(undoGroup);
+            }
         }
-    }
 
-    static void CloneClipAsset(TimelineClip source, TimelineClip target, TimelineAsset targetAsset)
-    {
-        if (source.asset == null) return;
-
-        var clonedAsset = UnityEngine.Object.Instantiate(source.asset);
-        clonedAsset.name = source.asset.name;
-
-        if (target.asset != null)
+        static TimelineAsset CloneTimelineWithOnly(GroupTrack sourceGroup)
         {
-            if (AssetDatabase.IsSubAsset(target.asset))
-                AssetDatabase.RemoveObjectFromAsset(target.asset);
-            UnityEngine.Object.DestroyImmediate(target.asset);
+            var temp = ScriptableObject.CreateInstance<TimelineAsset>();
+            temp.name = sourceGroup.name;
+            foreach (var child in sourceGroup.GetChildTracks())
+                CloneTrackRecursive(child, temp, null);
+            return temp;
         }
 
-        AssetDatabase.AddObjectToAsset(clonedAsset, targetAsset);
-        target.asset = clonedAsset;
-    }
-
-    static void CopyClipProperties(TimelineClip source, TimelineClip target)
-    {
-        target.start = source.start;
-        target.duration = source.duration;
-        target.displayName = source.displayName;
-        target.clipIn = source.clipIn;
-        target.timeScale = source.timeScale;
-    }
-
-    static TimelineClip InvokeCreateDefaultClip(TrackAsset track)
-    {
-        var method = track.GetType().GetMethod("CreateDefaultClip",
-            BindingFlags.Public | BindingFlags.Instance,
-            null, Type.EmptyTypes, null);
-        return method?.Invoke(track, null) as TimelineClip;
-    }
-
-    static Dictionary<TrackAsset, UnityEngine.Object> CollectBindings(PlayableDirector director)
-    {
-        var result = new Dictionary<TrackAsset, UnityEngine.Object>();
-        if (director.playableAsset is not TimelineAsset asset) return result;
-
-        foreach (var track in asset.GetOutputTracks())
-            result[track] = director.GetGenericBinding(track);
-
-        return result;
-    }
-
-    static void ApplyBindings(
-        PlayableDirector target,
-        Dictionary<TrackAsset, UnityEngine.Object> sourceBindings,
-        Dictionary<TrackAsset, TrackAsset> trackMap)
-    {
-        foreach (var kv in trackMap)
+        static TrackAsset CloneTrackRecursive(TrackAsset source, TimelineAsset dest, TrackAsset parent)
         {
-            if (sourceBindings.TryGetValue(kv.Key, out var binding) && binding != null)
-                target.SetGenericBinding(kv.Value, binding);
+            var clone = dest.CreateTrack(source.GetType(), parent, source.name);
+
+            clone.muted = source.muted;
+            clone.locked = source.locked;
+            if (source is AnimationTrack animSrc && clone is AnimationTrack animDst)
+                EditorUtility.CopySerialized(animSrc, animDst);
+
+            foreach (var clip in source.GetClips())
+            {
+                var newClip = clone.CreateDefaultClip();
+                if (clip.asset != null)
+                {
+                    var newPlayableAsset = Object.Instantiate(clip.asset);
+                    newPlayableAsset.name = clip.asset.name;
+                    newClip.asset = newPlayableAsset;
+                }
+
+                newClip.start = clip.start;
+                newClip.duration = clip.duration;
+                newClip.displayName = clip.displayName;
+                newClip.clipIn = clip.clipIn;
+                newClip.timeScale = clip.timeScale;
+                newClip.blendInDuration = clip.blendInDuration;
+                newClip.blendOutDuration = clip.blendOutDuration;
+                newClip.easeInDuration = clip.easeInDuration;
+                newClip.easeOutDuration = clip.easeOutDuration;
+                newClip.mixInCurve = clip.mixInCurve;
+                newClip.mixOutCurve = clip.mixOutCurve;
+            }
+
+            foreach (var marker in source.GetMarkers())
+            {
+                if (marker is ScriptableObject so)
+                {
+                    var newMarker = clone.CreateMarker(so.GetType(), marker.time);
+                    if (newMarker is ScriptableObject newSo)
+                        EditorUtility.CopySerialized(so, newSo);
+                }
+            }
+
+            foreach (var child in source.GetChildTracks())
+                CloneTrackRecursive(child, dest, clone);
+
+            return clone;
         }
-    }
 
-    static string AssetDirectory(UnityEngine.Object asset)
-    {
-        var path = AssetDatabase.GetAssetPath(asset);
-        return string.IsNullOrEmpty(path) ? "Assets" : Path.GetDirectoryName(path);
-    }
-
-    static string CommonDirectory(PlayableDirector[] directors)
-    {
-        foreach (var d in directors)
+        static void TransferBindings(PlayableDirector src, PlayableDirector dst, GroupTrack group)
         {
-            var dir = AssetDirectory(d.playableAsset);
-            if (dir != "Assets") return dir;
+            foreach (var track in group.GetChildTracks())
+            {
+                var binding = src.GetGenericBinding(track);
+                var dstAsset = (TimelineAsset)dst.playableAsset;
+                var dstTrack = dstAsset.GetOutputTracks().FirstOrDefault(t => t.name == track.name);
+                if (dstTrack != null && binding != null)
+                    dst.SetGenericBinding(dstTrack, binding);
+            }
         }
-        return "Assets";
+
+        static void TransferChildBindings(PlayableDirector src, TrackAsset track, Dictionary<TrackAsset, Object> map)
+        {
+            var binding = src.GetGenericBinding(track);
+            if (binding != null) map[track] = binding;
+            foreach (var child in track.GetChildTracks())
+                TransferChildBindings(src, child, map);
+        }
+
+        static void CopyDirectorSettings(PlayableDirector src, PlayableDirector dst)
+        {
+            dst.timeUpdateMode = src.timeUpdateMode;
+            dst.extrapolationMode = src.extrapolationMode;
+            dst.playOnAwake = false;
+            dst.time = src.time;
+        }
+
+        static void BackupAndDisableSources(PlayableDirector[] sources)
+        {
+            var backupDir = "Assets/_TimelineBackups";
+            if (!AssetDatabase.IsValidFolder(backupDir))
+                AssetDatabase.CreateFolder("Assets", "_TimelineBackups");
+
+            foreach (var src in sources)
+            {
+                var path = AssetDatabase.GetAssetPath(src.playableAsset);
+                if (!string.IsNullOrEmpty(path))
+                {
+                    var fileName = Path.GetFileName(path);
+                    AssetDatabase.MoveAsset(path, $"{backupDir}/{fileName}");
+                }
+
+                Undo.RegisterCompleteObjectUndo(src.gameObject, "Backup");
+                src.gameObject.SetActive(false);
+            }
+        }
+
+        static string GetDirectory(Object asset)
+        {
+            var path = AssetDatabase.GetAssetPath(asset);
+            return string.IsNullOrEmpty(path) ? "Assets" : Path.GetDirectoryName(path).Replace("\\", "/");
+        }
     }
 }

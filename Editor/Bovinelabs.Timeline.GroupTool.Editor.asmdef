@@ -1,8 +1,9 @@
 {
-  "name": "Bovinelabs.Timeline.GroupTool.Editor",
-  "rootNamespace": "",
+  "name": "BovineLabs.Timeline.GroupTool.Editor",
+  "rootNamespace": "BovineLabs.Timeline",
   "references": [
-    "Unity.Timeline"
+    "Unity.Timeline",
+    "Unity.Timeline.Editor"
   ],
   "includePlatforms": [
     "Editor"
@@ -10,8 +11,8 @@
   "excludePlatforms": [],
   "allowUnsafeCode": false,
   "overrideReferences": false,
-  "autoReferenced": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
   "defineConstraints": [],
-  "versionDefines": [],
-  "noEngineReferences": false
+  "versionDefines": []
 }
