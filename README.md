@@ -26,16 +26,23 @@ Add to `Packages/manifest.json`:
 2. Right-click the **PlayableDirector** component header (three-dot menu) in the Inspector.
 3. Click **Join Timelines**.
 4. All selected timelines merge into a single `TimelineAsset` with `GroupTrack`s named after each source timeline.
-5. Source GameObjects and their timeline assets are deleted from disk after the merge succeeds.
+5. Source GameObjects are **disabled**, and their `.playable` assets are **moved to `Assets/_TimelineBackups`** (never deleted). Delete that folder yourself once you're happy with the result.
 6. The merged `GameObject` replaces the first source in the hierarchy.
 
 ## What Gets Preserved
 
-- Track types (ActivationTrack, AnimationTrack, etc.)
-- Clip timing (start, duration, clip-in, time scale)
-- Clip assets (PlayableAssets are cloned into the target timeline)
-- Director bindings (GenericBindings transfer to new tracks)
-- Hierarchy position (sibling index and parent)
+- Track types (ActivationTrack, AnimationTrack, etc.), including nested `GroupTrack`s
+- Clip timing (start, duration, clip-in, time scale, blends, eases, mix curves)
+- Clip assets — `PlayableAsset`s are cloned **and registered as sub-assets**, so they survive entering Play and reopening the project
+- Markers / signals (copied per marker)
+- Director bindings (transferred via a source→clone track map, so duplicate names and nested-group bindings are kept)
+- Hierarchy position (parent and sibling index)
+- **Scene of origin** — new objects are created in the same scene/SubScene as the source director, not the active scene
+
+## Notes & Limitations
+
+- New scene objects are fully undoable (Ctrl+Z). The `.playable` asset files created/moved on disk are **not** removed by undo — clean them up manually if you undo.
+- If the source director's scene has never been saved, the tool warns first (created objects live only in that scene).
 
 ## Requirements
 
