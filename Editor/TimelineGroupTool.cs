@@ -64,9 +64,12 @@ namespace BovineLabs.Timeline.Editor
             var siblingIndex = source.transform.GetSiblingIndex();
             var groups = sourceAsset.GetRootTracks().Where(t => t is GroupTrack).Cast<GroupTrack>().ToList();
 
+            // NOTE: do NOT wrap this in AssetDatabase.StartAssetEditing/StopAssetEditing. Inside that batch CreateAsset is
+            // deferred, so AssetDatabase.Contains(dest) below returns false and AddObjectToAsset is skipped — the cloned
+            // clip assets stay in-memory only and get garbage-collected on the next domain reload (entering Play), which
+            // silently empties/corrupts the new .playable. Creating assets unbatched persists the sub-assets immediately.
             try
             {
-                AssetDatabase.StartAssetEditing();
                 for (int i = 0; i < groups.Count; i++)
                 {
                     var group = groups[i];
@@ -112,7 +115,6 @@ namespace BovineLabs.Timeline.Editor
             }
             finally
             {
-                AssetDatabase.StopAssetEditing();
                 EditorUtility.ClearProgressBar();
                 AssetDatabase.SaveAssets();
                 EditorSceneManager.MarkSceneDirty(scene);
@@ -142,10 +144,10 @@ namespace BovineLabs.Timeline.Editor
             // bindingMap is keyed by the CLONE track (the one the merged director actually owns), never the source track.
             var bindingMap = new Dictionary<TrackAsset, Object>();
 
+            // Unbatched on purpose — see the note in Expand. StartAssetEditing would defer CreateAsset, making
+            // AssetDatabase.Contains(merged) false so the clip sub-assets never persist and vanish on entering Play.
             try
             {
-                AssetDatabase.StartAssetEditing();
-
                 // Persist before cloning so clip sub-assets stick (see Expand for the why).
                 var path = AssetDatabase.GenerateUniqueAssetPath($"{directory}/{merged.name}.playable");
                 AssetDatabase.CreateAsset(merged, path);
@@ -191,7 +193,6 @@ namespace BovineLabs.Timeline.Editor
             }
             finally
             {
-                AssetDatabase.StopAssetEditing();
                 EditorUtility.ClearProgressBar();
                 AssetDatabase.SaveAssets();
                 EditorSceneManager.MarkSceneDirty(scene);
