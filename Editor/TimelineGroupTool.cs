@@ -152,44 +152,13 @@ namespace BovineLabs.Timeline.Editor
                 var path = AssetDatabase.GenerateUniqueAssetPath($"{directory}/{merged.name}.playable");
                 AssetDatabase.CreateAsset(merged, path);
 
-                for (int i = 0; i < sources.Length; i++)
-                {
-                    var src = sources[i];
-                    EditorUtility.DisplayProgressBar("Joining Timelines", src.gameObject.name, i / (float)sources.Length);
-
-                    var srcAsset = (TimelineAsset)src.playableAsset;
-                    var group = merged.CreateTrack<GroupTrack>(null, srcAsset.name);
-
-                    var map = new Dictionary<TrackAsset, TrackAsset>();
-                    foreach (var rootTrack in srcAsset.GetRootTracks())
-                        CloneTrackRecursive(rootTrack, merged, group, map);
-
-                    // Map every source track (root + nested) to its clone, then key the binding by the clone.
-                    foreach (var kv in map)
-                    {
-                        var binding = src.GetGenericBinding(kv.Key);
-                        if (binding != null) bindingMap[kv.Value] = binding;
-                    }
-                }
-
+                CloneSourcesIntoMerged(sources, merged, bindingMap);
                 EditorUtility.SetDirty(merged);
 
-                var parent = first.transform.parent;
-                var siblingIndex = first.transform.GetSiblingIndex();
-                var go = new GameObject(merged.name);
-                PlaceInScene(go, parent, scene, siblingIndex);
-                Undo.RegisterCreatedObjectUndo(go, "Join Timelines");
-
-                var dir = go.AddComponent<PlayableDirector>();
-                Undo.RegisterCreatedObjectUndo(dir, "Join Timelines");
-                dir.playableAsset = merged;
-                CopyDirectorSettings(first, dir);
-
-                foreach (var kv in bindingMap)
-                    dir.SetGenericBinding(kv.Key, kv.Value);
+                var dir = CreateMergedDirector(first, merged, scene, bindingMap);
 
                 BackupAndDisableSources(sources);
-                Selection.activeGameObject = go;
+                Selection.activeGameObject = dir.gameObject;
             }
             finally
             {
@@ -198,6 +167,53 @@ namespace BovineLabs.Timeline.Editor
                 EditorSceneManager.MarkSceneDirty(scene);
                 Undo.CollapseUndoOperations(undoGroup);
             }
+        }
+
+        // Clones every source timeline into its own GroupTrack on the merged asset and records each clone's binding.
+        // bindingMap is keyed by the CLONE track (the one the merged director will own), never the source track.
+        static void CloneSourcesIntoMerged(PlayableDirector[] sources, TimelineAsset merged,
+            Dictionary<TrackAsset, Object> bindingMap)
+        {
+            for (int i = 0; i < sources.Length; i++)
+            {
+                var src = sources[i];
+                EditorUtility.DisplayProgressBar("Joining Timelines", src.gameObject.name, i / (float)sources.Length);
+
+                var srcAsset = (TimelineAsset)src.playableAsset;
+                var group = merged.CreateTrack<GroupTrack>(null, srcAsset.name);
+
+                var map = new Dictionary<TrackAsset, TrackAsset>();
+                foreach (var rootTrack in srcAsset.GetRootTracks())
+                    CloneTrackRecursive(rootTrack, merged, group, map);
+
+                // Map every source track (root + nested) to its clone, then key the binding by the clone.
+                foreach (var kv in map)
+                {
+                    var binding = src.GetGenericBinding(kv.Key);
+                    if (binding != null) bindingMap[kv.Value] = binding;
+                }
+            }
+        }
+
+        // Creates the GameObject + PlayableDirector that owns the merged timeline, placed beside the first source.
+        static PlayableDirector CreateMergedDirector(PlayableDirector first, TimelineAsset merged, Scene scene,
+            Dictionary<TrackAsset, Object> bindingMap)
+        {
+            var parent = first.transform.parent;
+            var siblingIndex = first.transform.GetSiblingIndex();
+            var go = new GameObject(merged.name);
+            PlaceInScene(go, parent, scene, siblingIndex);
+            Undo.RegisterCreatedObjectUndo(go, "Join Timelines");
+
+            var dir = go.AddComponent<PlayableDirector>();
+            Undo.RegisterCreatedObjectUndo(dir, "Join Timelines");
+            dir.playableAsset = merged;
+            CopyDirectorSettings(first, dir);
+
+            foreach (var kv in bindingMap)
+                dir.SetGenericBinding(kv.Key, kv.Value);
+
+            return dir;
         }
 
         static TrackAsset CloneTrackRecursive(TrackAsset source, TimelineAsset dest, TrackAsset parent,
