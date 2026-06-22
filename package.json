@@ -8,7 +8,14 @@
   "dependencies": {
     "com.unity.timeline": "1.7.6"
   },
-  "keywords": ["timeline", "group", "split", "join", "merge", "non-destructive"],
+  "keywords": [
+    "timeline",
+    "group",
+    "split",
+    "join",
+    "merge",
+    "non-destructive"
+  ],
   "author": {
     "name": "BovineLabs",
     "url": "https://github.com/IAFahim"

@@ -12,38 +12,39 @@ namespace BovineLabs.Timeline.Editor
 {
     public static class TimelineGroupTool
     {
-        const string SplitPath = "CONTEXT/PlayableDirector/Split Groups";
-        const string JoinPath = "CONTEXT/PlayableDirector/Join Timelines";
+        private const string SplitPath = "CONTEXT/PlayableDirector/Split Groups";
+        private const string JoinPath = "CONTEXT/PlayableDirector/Join Timelines";
 
         [MenuItem(SplitPath)]
-        static void SplitFromInspector(MenuCommand cmd)
+        private static void SplitFromInspector(MenuCommand cmd)
         {
-            if (cmd.context is PlayableDirector d) Expand(d, false);
+            if (cmd.context is PlayableDirector d) Expand(d);
         }
 
         [MenuItem(SplitPath, true)]
-        static bool CanSplit(MenuCommand cmd)
+        private static bool CanSplit(MenuCommand cmd)
         {
             return cmd.context is PlayableDirector d && d.playableAsset is TimelineAsset tl
-                && tl.GetRootTracks().Any(t => t is GroupTrack);
+                                                     && tl.GetRootTracks().Any(t => t is GroupTrack);
         }
 
         [MenuItem(JoinPath)]
-        static void JoinFromInspector(MenuCommand cmd)
+        private static void JoinFromInspector(MenuCommand cmd)
         {
             var dirs = Selection.gameObjects
-               .Select(go => go.GetComponent<PlayableDirector>())
-               .Where(d => d != null && d.playableAsset is TimelineAsset)
-               .Distinct()
-               .ToArray();
+                .Select(go => go.GetComponent<PlayableDirector>())
+                .Where(d => d != null && d.playableAsset is TimelineAsset)
+                .Distinct()
+                .ToArray();
             if (dirs.Length >= 2) Collapse(dirs);
         }
 
         [MenuItem(JoinPath, true)]
-        static bool CanJoin(MenuCommand cmd)
+        private static bool CanJoin(MenuCommand cmd)
         {
             return Selection.gameObjects.Length >= 2
-                && Selection.gameObjects.All(go => go.GetComponent<PlayableDirector>()?.playableAsset is TimelineAsset);
+                   && Selection.gameObjects.All(go =>
+                       go.GetComponent<PlayableDirector>()?.playableAsset is TimelineAsset);
         }
 
         public static void Expand(PlayableDirector source, bool deleteSourceGroups = false)
@@ -51,8 +52,6 @@ namespace BovineLabs.Timeline.Editor
             var sourceAsset = source.playableAsset as TimelineAsset;
             if (sourceAsset == null) return;
 
-            // The director (and therefore the objects we create) must live in a real, saved scene. Creating siblings in
-            // the wrong scene is what makes split objects "pop open" a SubScene or land in the wrong open scene.
             var scene = source.gameObject.scene;
             if (!EnsureSceneSaved(scene)) return;
 
@@ -64,27 +63,19 @@ namespace BovineLabs.Timeline.Editor
             var siblingIndex = source.transform.GetSiblingIndex();
             var groups = sourceAsset.GetRootTracks().Where(t => t is GroupTrack).Cast<GroupTrack>().ToList();
 
-            // NOTE: do NOT wrap this in AssetDatabase.StartAssetEditing/StopAssetEditing. Inside that batch CreateAsset is
-            // deferred, so AssetDatabase.Contains(dest) below returns false and AddObjectToAsset is skipped — the cloned
-            // clip assets stay in-memory only and get garbage-collected on the next domain reload (entering Play), which
-            // silently empties/corrupts the new .playable. Creating assets unbatched persists the sub-assets immediately.
             try
             {
-                for (int i = 0; i < groups.Count; i++)
+                for (var i = 0; i < groups.Count; i++)
                 {
                     var group = groups[i];
                     EditorUtility.DisplayProgressBar("Splitting Timeline", group.name, i / (float)groups.Count);
 
-                    // Skip empty groups instead of emitting an orphan, track-less .playable.
                     if (!group.GetChildTracks().Any())
                     {
                         Debug.LogWarning($"Group Tool: skipped empty group '{group.name}' (no child tracks).");
                         continue;
                     }
 
-                    // Persist the destination asset FIRST so the clip sub-assets we add below are actually serialized into
-                    // the .playable file. Without this they are loose in-memory objects that vanish on the next domain
-                    // reload (e.g. entering Play) and the new timeline silently becomes empty.
                     var newAsset = ScriptableObject.CreateInstance<TimelineAsset>();
                     newAsset.name = $"{sourceAsset.name}_{group.name}";
                     var path = AssetDatabase.GenerateUniqueAssetPath($"{directory}/{newAsset.name}.playable");
@@ -127,8 +118,8 @@ namespace BovineLabs.Timeline.Editor
             sources = sources.Where(s => s != null && s.playableAsset is TimelineAsset).Distinct().ToArray();
             if (sources.Length < 2) return;
             if (!EditorUtility.DisplayDialog("Join Timelines",
-                $"Merge {sources.Length} timelines into one? Sources will be moved to Assets/_TimelineBackups (not deleted).",
-                "Join", "Cancel")) return;
+                    $"Merge {sources.Length} timelines into one? Sources will be moved to Assets/_TimelineBackups (not deleted).",
+                    "Join", "Cancel")) return;
 
             var first = sources[0];
             var scene = first.gameObject.scene;
@@ -141,14 +132,10 @@ namespace BovineLabs.Timeline.Editor
             var merged = ScriptableObject.CreateInstance<TimelineAsset>();
             merged.name = $"{first.gameObject.name}_Merged";
 
-            // bindingMap is keyed by the CLONE track (the one the merged director actually owns), never the source track.
             var bindingMap = new Dictionary<TrackAsset, Object>();
 
-            // Unbatched on purpose — see the note in Expand. StartAssetEditing would defer CreateAsset, making
-            // AssetDatabase.Contains(merged) false so the clip sub-assets never persist and vanish on entering Play.
             try
             {
-                // Persist before cloning so clip sub-assets stick (see Expand for the why).
                 var path = AssetDatabase.GenerateUniqueAssetPath($"{directory}/{merged.name}.playable");
                 AssetDatabase.CreateAsset(merged, path);
 
@@ -169,12 +156,10 @@ namespace BovineLabs.Timeline.Editor
             }
         }
 
-        // Clones every source timeline into its own GroupTrack on the merged asset and records each clone's binding.
-        // bindingMap is keyed by the CLONE track (the one the merged director will own), never the source track.
-        static void CloneSourcesIntoMerged(PlayableDirector[] sources, TimelineAsset merged,
+        private static void CloneSourcesIntoMerged(PlayableDirector[] sources, TimelineAsset merged,
             Dictionary<TrackAsset, Object> bindingMap)
         {
-            for (int i = 0; i < sources.Length; i++)
+            for (var i = 0; i < sources.Length; i++)
             {
                 var src = sources[i];
                 EditorUtility.DisplayProgressBar("Joining Timelines", src.gameObject.name, i / (float)sources.Length);
@@ -186,7 +171,6 @@ namespace BovineLabs.Timeline.Editor
                 foreach (var rootTrack in srcAsset.GetRootTracks())
                     CloneTrackRecursive(rootTrack, merged, group, map);
 
-                // Map every source track (root + nested) to its clone, then key the binding by the clone.
                 foreach (var kv in map)
                 {
                     var binding = src.GetGenericBinding(kv.Key);
@@ -195,8 +179,7 @@ namespace BovineLabs.Timeline.Editor
             }
         }
 
-        // Creates the GameObject + PlayableDirector that owns the merged timeline, placed beside the first source.
-        static PlayableDirector CreateMergedDirector(PlayableDirector first, TimelineAsset merged, Scene scene,
+        private static PlayableDirector CreateMergedDirector(PlayableDirector first, TimelineAsset merged, Scene scene,
             Dictionary<TrackAsset, Object> bindingMap)
         {
             var parent = first.transform.parent;
@@ -216,7 +199,7 @@ namespace BovineLabs.Timeline.Editor
             return dir;
         }
 
-        static TrackAsset CloneTrackRecursive(TrackAsset source, TimelineAsset dest, TrackAsset parent,
+        private static TrackAsset CloneTrackRecursive(TrackAsset source, TimelineAsset dest, TrackAsset parent,
             Dictionary<TrackAsset, TrackAsset> map)
         {
             var clone = dest.CreateTrack(source.GetType(), parent, source.name);
@@ -225,8 +208,6 @@ namespace BovineLabs.Timeline.Editor
             clone.muted = source.muted;
             clone.locked = source.locked;
 
-            // Do NOT CopySerialized an AnimationTrack: it bulk-copies internal fields (m_Clips, m_Markers, parent and
-            // owning-asset references), which corrupts the freshly created clone. Copy only the user-facing fields.
             if (source is AnimationTrack animSrc && clone is AnimationTrack animDst)
                 CopyAnimationTrackFields(animSrc, animDst, dest);
 
@@ -240,18 +221,12 @@ namespace BovineLabs.Timeline.Editor
                     newPlayableAsset.name = clip.asset.name;
                     newClip.asset = newPlayableAsset;
 
-                    // Object.Instantiate deep-clones only the PlayableAsset; any referenced UnityEngine.Object is copied
-                    // by reference. A recorded AnimationPlayableAsset's curve is an AnimationClip stored as a sub-asset of
-                    // the SOURCE timeline, so the clone would still point at (and mutate / dangle on) the source's clip.
-                    // Deep-clone any such embedded curve; externally-imported .anim references are shared by design.
                     if (newPlayableAsset is AnimationPlayableAsset animPlayable && animPlayable.clip != null)
                     {
                         var clonedCurve = CloneEmbeddedClip(animPlayable.clip, source.timelineAsset, dest);
                         if (clonedCurve != null) animPlayable.clip = clonedCurve;
                     }
 
-                    // Register the real clip asset as a sub-asset of the persisted timeline and discard the throwaway
-                    // default asset CreateDefaultClip produced, so it is not left orphaned in the .playable file.
                     if (AssetDatabase.Contains(dest))
                     {
                         AssetDatabase.AddObjectToAsset(newPlayableAsset, dest);
@@ -273,14 +248,12 @@ namespace BovineLabs.Timeline.Editor
             }
 
             foreach (var marker in source.GetMarkers())
-            {
                 if (marker is ScriptableObject so)
                 {
                     var newMarker = clone.CreateMarker(so.GetType(), marker.time);
                     if (newMarker is ScriptableObject newSo)
                         EditorUtility.CopySerialized(so, newSo);
                 }
-            }
 
             foreach (var child in source.GetChildTracks())
                 CloneTrackRecursive(child, dest, clone, map);
@@ -288,7 +261,7 @@ namespace BovineLabs.Timeline.Editor
             return clone;
         }
 
-        static void CopyAnimationTrackFields(AnimationTrack src, AnimationTrack dst, TimelineAsset dest)
+        private static void CopyAnimationTrackFields(AnimationTrack src, AnimationTrack dst, TimelineAsset dest)
         {
             dst.trackOffset = src.trackOffset;
             dst.position = src.position;
@@ -296,11 +269,6 @@ namespace BovineLabs.Timeline.Editor
             dst.applyAvatarMask = src.applyAvatarMask;
             dst.avatarMask = src.avatarMask;
 
-            // An AnimationTrack authored in infinite/recorded mode stores its animation in m_InfiniteClip — a sub-asset
-            // of the source timeline that GetClips() does NOT return, so the per-clip loop above never sees it. Without
-            // this the clone is a completely empty track (silent total loss of the recorded animation). Deep-clone the
-            // embedded curve into dest and carry the offset/extrapolation fields. The infiniteClip setter and a couple of
-            // offset fields are internal to Unity.Timeline, so write the serialized backing fields directly.
             if (src.inClipMode || src.infiniteClip == null)
                 return;
 
@@ -315,7 +283,6 @@ namespace BovineLabs.Timeline.Editor
             so.FindProperty("m_InfiniteClipPreExtrapolation").enumValueIndex = (int)src.infiniteClipPreExtrapolation;
             so.FindProperty("m_InfiniteClipPostExtrapolation").enumValueIndex = (int)src.infiniteClipPostExtrapolation;
 
-            // Mirror the internal-only fields by name; tolerate them being absent in a given Timeline version.
             var timeOffset = so.FindProperty("m_InfiniteClipTimeOffset");
             if (timeOffset != null)
                 CopyByName(src, timeOffset, "m_InfiniteClipTimeOffset");
@@ -326,9 +293,7 @@ namespace BovineLabs.Timeline.Editor
             so.ApplyModifiedPropertiesWithoutUndo();
         }
 
-        // Reads a serialized field from the source track by name and writes it onto a matching destination property.
-        // Used only for fields whose strongly-typed accessor is internal to Unity.Timeline.
-        static void CopyByName(AnimationTrack src, SerializedProperty dstProp, string fieldName)
+        private static void CopyByName(AnimationTrack src, SerializedProperty dstProp, string fieldName)
         {
             var srcProp = new SerializedObject(src).FindProperty(fieldName);
             if (srcProp == null)
@@ -345,15 +310,11 @@ namespace BovineLabs.Timeline.Editor
             }
         }
 
-        // Deep-clones an AnimationClip ONLY when it is an embedded sub-asset of the source timeline (recorded curve),
-        // adding the clone into dest. Externally-imported .anim assets live at their own path and are left shared by
-        // design. Returns null when nothing needs to change (shared external clip, or dest not yet persisted).
-        static AnimationClip CloneEmbeddedClip(AnimationClip clip, Object sourceAsset, TimelineAsset dest)
+        private static AnimationClip CloneEmbeddedClip(AnimationClip clip, Object sourceAsset, TimelineAsset dest)
         {
             if (clip == null || sourceAsset == null || !AssetDatabase.Contains(dest))
                 return null;
 
-            // Embedded recorded curves share the source timeline's asset path; imported .anim files do not.
             if (AssetDatabase.GetAssetPath(clip) != AssetDatabase.GetAssetPath(sourceAsset))
                 return null;
 
@@ -363,9 +324,8 @@ namespace BovineLabs.Timeline.Editor
             return clone;
         }
 
-        // Binding transfer for both paths is driven entirely by the source->clone map built during cloning. This covers
-        // nested groups and tracks that share a name (FirstOrDefault name matching dropped both silently).
-        static void TransferBindings(PlayableDirector src, PlayableDirector dst, Dictionary<TrackAsset, TrackAsset> map)
+        private static void TransferBindings(PlayableDirector src, PlayableDirector dst,
+            Dictionary<TrackAsset, TrackAsset> map)
         {
             foreach (var kv in map)
             {
@@ -374,7 +334,7 @@ namespace BovineLabs.Timeline.Editor
             }
         }
 
-        static void CopyDirectorSettings(PlayableDirector src, PlayableDirector dst)
+        private static void CopyDirectorSettings(PlayableDirector src, PlayableDirector dst)
         {
             dst.timeUpdateMode = src.timeUpdateMode;
             dst.extrapolationMode = src.extrapolationMode;
@@ -383,7 +343,7 @@ namespace BovineLabs.Timeline.Editor
             dst.time = src.time;
         }
 
-        static void BackupAndDisableSources(PlayableDirector[] sources)
+        private static void BackupAndDisableSources(PlayableDirector[] sources)
         {
             var backupDir = "Assets/_TimelineBackups";
             if (!AssetDatabase.IsValidFolder(backupDir))
@@ -406,37 +366,27 @@ namespace BovineLabs.Timeline.Editor
             }
         }
 
-        // Parents the new object correctly AND guarantees it ends up in the source director's scene. SetParent inherits
-        // the parent's scene; a root-level object would otherwise default to the active scene, which is exactly what
-        // breaks when the director lives in a SubScene or a non-active open scene.
-        static void PlaceInScene(GameObject go, Transform parent, Scene scene, int siblingIndex)
+        private static void PlaceInScene(GameObject go, Transform parent, Scene scene, int siblingIndex)
         {
             if (parent != null)
-            {
                 go.transform.SetParent(parent, false);
-            }
-            else if (scene.IsValid() && go.scene != scene)
-            {
-                SceneManager.MoveGameObjectToScene(go, scene);
-            }
+            else if (scene.IsValid() && go.scene != scene) SceneManager.MoveGameObjectToScene(go, scene);
 
             go.transform.SetSiblingIndex(siblingIndex);
         }
 
-        static bool EnsureSceneSaved(Scene scene)
+        private static bool EnsureSceneSaved(Scene scene)
         {
             if (scene.IsValid() && string.IsNullOrEmpty(scene.path))
-            {
                 return EditorUtility.DisplayDialog("Unsaved Scene",
                     "The scene that owns this director has never been saved. Objects created by this tool live only in " +
                     "that scene and will be lost if the editor closes before you save it.\n\nContinue anyway?",
                     "Continue", "Cancel");
-            }
 
             return true;
         }
 
-        static string GetDirectory(Object asset)
+        private static string GetDirectory(Object asset)
         {
             var path = AssetDatabase.GetAssetPath(asset);
             return string.IsNullOrEmpty(path) ? "Assets" : Path.GetDirectoryName(path).Replace("\\", "/");
