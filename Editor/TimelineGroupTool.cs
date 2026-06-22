@@ -228,7 +228,7 @@ namespace BovineLabs.Timeline.Editor
             // Do NOT CopySerialized an AnimationTrack: it bulk-copies internal fields (m_Clips, m_Markers, parent and
             // owning-asset references), which corrupts the freshly created clone. Copy only the user-facing fields.
             if (source is AnimationTrack animSrc && clone is AnimationTrack animDst)
-                CopyAnimationTrackFields(animSrc, animDst);
+                CopyAnimationTrackFields(animSrc, animDst, dest);
 
             foreach (var clip in source.GetClips())
             {
@@ -239,6 +239,16 @@ namespace BovineLabs.Timeline.Editor
                     var newPlayableAsset = Object.Instantiate(clip.asset);
                     newPlayableAsset.name = clip.asset.name;
                     newClip.asset = newPlayableAsset;
+
+                    // Object.Instantiate deep-clones only the PlayableAsset; any referenced UnityEngine.Object is copied
+                    // by reference. A recorded AnimationPlayableAsset's curve is an AnimationClip stored as a sub-asset of
+                    // the SOURCE timeline, so the clone would still point at (and mutate / dangle on) the source's clip.
+                    // Deep-clone any such embedded curve; externally-imported .anim references are shared by design.
+                    if (newPlayableAsset is AnimationPlayableAsset animPlayable && animPlayable.clip != null)
+                    {
+                        var clonedCurve = CloneEmbeddedClip(animPlayable.clip, source.timelineAsset, dest);
+                        if (clonedCurve != null) animPlayable.clip = clonedCurve;
+                    }
 
                     // Register the real clip asset as a sub-asset of the persisted timeline and discard the throwaway
                     // default asset CreateDefaultClip produced, so it is not left orphaned in the .playable file.
@@ -278,13 +288,79 @@ namespace BovineLabs.Timeline.Editor
             return clone;
         }
 
-        static void CopyAnimationTrackFields(AnimationTrack src, AnimationTrack dst)
+        static void CopyAnimationTrackFields(AnimationTrack src, AnimationTrack dst, TimelineAsset dest)
         {
             dst.trackOffset = src.trackOffset;
             dst.position = src.position;
             dst.rotation = src.rotation;
             dst.applyAvatarMask = src.applyAvatarMask;
             dst.avatarMask = src.avatarMask;
+
+            // An AnimationTrack authored in infinite/recorded mode stores its animation in m_InfiniteClip — a sub-asset
+            // of the source timeline that GetClips() does NOT return, so the per-clip loop above never sees it. Without
+            // this the clone is a completely empty track (silent total loss of the recorded animation). Deep-clone the
+            // embedded curve into dest and carry the offset/extrapolation fields. The infiniteClip setter and a couple of
+            // offset fields are internal to Unity.Timeline, so write the serialized backing fields directly.
+            if (src.inClipMode || src.infiniteClip == null)
+                return;
+
+            var clonedClip = CloneEmbeddedClip(src.infiniteClip, src.timelineAsset, dest);
+            if (clonedClip == null)
+                return;
+
+            var so = new SerializedObject(dst);
+            so.FindProperty("m_InfiniteClip").objectReferenceValue = clonedClip;
+            so.FindProperty("m_InfiniteClipOffsetPosition").vector3Value = src.infiniteClipOffsetPosition;
+            so.FindProperty("m_InfiniteClipOffsetEulerAngles").vector3Value = src.infiniteClipOffsetEulerAngles;
+            so.FindProperty("m_InfiniteClipPreExtrapolation").enumValueIndex = (int)src.infiniteClipPreExtrapolation;
+            so.FindProperty("m_InfiniteClipPostExtrapolation").enumValueIndex = (int)src.infiniteClipPostExtrapolation;
+
+            // Mirror the internal-only fields by name; tolerate them being absent in a given Timeline version.
+            var timeOffset = so.FindProperty("m_InfiniteClipTimeOffset");
+            if (timeOffset != null)
+                CopyByName(src, timeOffset, "m_InfiniteClipTimeOffset");
+            var footIK = so.FindProperty("m_InfiniteClipApplyFootIK");
+            if (footIK != null)
+                CopyByName(src, footIK, "m_InfiniteClipApplyFootIK");
+
+            so.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        // Reads a serialized field from the source track by name and writes it onto a matching destination property.
+        // Used only for fields whose strongly-typed accessor is internal to Unity.Timeline.
+        static void CopyByName(AnimationTrack src, SerializedProperty dstProp, string fieldName)
+        {
+            var srcProp = new SerializedObject(src).FindProperty(fieldName);
+            if (srcProp == null)
+                return;
+
+            switch (dstProp.propertyType)
+            {
+                case SerializedPropertyType.Float:
+                    dstProp.doubleValue = srcProp.doubleValue;
+                    break;
+                case SerializedPropertyType.Boolean:
+                    dstProp.boolValue = srcProp.boolValue;
+                    break;
+            }
+        }
+
+        // Deep-clones an AnimationClip ONLY when it is an embedded sub-asset of the source timeline (recorded curve),
+        // adding the clone into dest. Externally-imported .anim assets live at their own path and are left shared by
+        // design. Returns null when nothing needs to change (shared external clip, or dest not yet persisted).
+        static AnimationClip CloneEmbeddedClip(AnimationClip clip, Object sourceAsset, TimelineAsset dest)
+        {
+            if (clip == null || sourceAsset == null || !AssetDatabase.Contains(dest))
+                return null;
+
+            // Embedded recorded curves share the source timeline's asset path; imported .anim files do not.
+            if (AssetDatabase.GetAssetPath(clip) != AssetDatabase.GetAssetPath(sourceAsset))
+                return null;
+
+            var clone = Object.Instantiate(clip);
+            clone.name = clip.name;
+            AssetDatabase.AddObjectToAsset(clone, dest);
+            return clone;
         }
 
         // Binding transfer for both paths is driven entirely by the source->clone map built during cloning. This covers
