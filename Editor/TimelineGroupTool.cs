@@ -58,7 +58,7 @@ namespace BovineLabs.Timeline.Editor
             Undo.IncrementCurrentGroup();
             var undoGroup = Undo.GetCurrentGroup();
 
-            var directory = GetDirectory(sourceAsset);
+            var directory = ResolveAssetDirectory(sourceAsset);
             var parent = source.transform.parent;
             var siblingIndex = source.transform.GetSiblingIndex();
             var groups = sourceAsset.GetRootTracks().Where(t => t is GroupTrack).Cast<GroupTrack>().ToList();
@@ -128,7 +128,7 @@ namespace BovineLabs.Timeline.Editor
             Undo.IncrementCurrentGroup();
             var undoGroup = Undo.GetCurrentGroup();
 
-            var directory = GetDirectory(first.playableAsset);
+            var directory = ResolveAssetDirectory(first.playableAsset);
             var merged = ScriptableObject.CreateInstance<TimelineAsset>();
             merged.name = $"{first.gameObject.name}_Merged";
 
@@ -203,6 +203,8 @@ namespace BovineLabs.Timeline.Editor
             Dictionary<TrackAsset, TrackAsset> map)
         {
             var clone = dest.CreateTrack(source.GetType(), parent, source.name);
+            if (clone == null) return null;
+
             map[source] = clone;
 
             clone.muted = source.muted;
@@ -285,15 +287,15 @@ namespace BovineLabs.Timeline.Editor
 
             var timeOffset = so.FindProperty("m_InfiniteClipTimeOffset");
             if (timeOffset != null)
-                CopyByName(src, timeOffset, "m_InfiniteClipTimeOffset");
+                MirrorInfiniteClipField(src, timeOffset, "m_InfiniteClipTimeOffset");
             var footIK = so.FindProperty("m_InfiniteClipApplyFootIK");
             if (footIK != null)
-                CopyByName(src, footIK, "m_InfiniteClipApplyFootIK");
+                MirrorInfiniteClipField(src, footIK, "m_InfiniteClipApplyFootIK");
 
             so.ApplyModifiedPropertiesWithoutUndo();
         }
 
-        private static void CopyByName(AnimationTrack src, SerializedProperty dstProp, string fieldName)
+        private static void MirrorInfiniteClipField(AnimationTrack src, SerializedProperty dstProp, string fieldName)
         {
             var srcProp = new SerializedObject(src).FindProperty(fieldName);
             if (srcProp == null)
@@ -386,10 +388,14 @@ namespace BovineLabs.Timeline.Editor
             return true;
         }
 
-        private static string GetDirectory(Object asset)
+        private static string ResolveAssetDirectory(Object asset)
         {
             var path = AssetDatabase.GetAssetPath(asset);
-            return string.IsNullOrEmpty(path) ? "Assets" : Path.GetDirectoryName(path).Replace("\\", "/");
+            if (string.IsNullOrEmpty(path))
+                return "Assets";
+
+            var directory = Path.GetDirectoryName(path);
+            return string.IsNullOrEmpty(directory) ? "Assets" : directory.Replace("\\", "/");
         }
     }
 }
