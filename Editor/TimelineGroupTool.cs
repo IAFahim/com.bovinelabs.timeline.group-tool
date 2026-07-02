@@ -18,14 +18,20 @@ namespace BovineLabs.Timeline.Editor
         [MenuItem(SplitPath)]
         private static void SplitFromInspector(MenuCommand cmd)
         {
-            if (cmd.context is PlayableDirector d) Expand(d);
+            if (cmd.context is PlayableDirector d)
+            {
+                var delete = EditorUtility.DisplayDialog("Split Groups",
+                    "Split this timeline into one director per group? Choose whether to also remove the original groups from the source timeline.",
+                    "Split & Remove Groups", "Split (Keep Groups)");
+                Expand(d, delete);
+            }
         }
 
         [MenuItem(SplitPath, true)]
         private static bool CanSplit(MenuCommand cmd)
         {
             return cmd.context is PlayableDirector d && d.playableAsset is TimelineAsset tl
-                                                     && tl.GetRootTracks().Any(t => t is GroupTrack);
+                                                     && tl.GetRootTracks().Any(t => t is GroupTrack g && g.GetChildTracks().Any());
         }
 
         [MenuItem(JoinPath)]
@@ -93,12 +99,13 @@ namespace BovineLabs.Timeline.Editor
                     var dir = go.AddComponent<PlayableDirector>();
                     Undo.RegisterCreatedObjectUndo(dir, "Split Groups");
                     dir.playableAsset = newAsset;
-                    CopyDirectorSettings(source, dir);
+                    CopyDirectorSettings(source, dir, false);
                     TransferBindings(source, dir, map);
                 }
 
                 if (deleteSourceGroups)
                 {
+                    Undo.RegisterCompleteObjectUndo(sourceAsset, "Split Groups");
                     foreach (var g in groups)
                         sourceAsset.DeleteTrack(g);
                     EditorUtility.SetDirty(sourceAsset);
@@ -115,7 +122,8 @@ namespace BovineLabs.Timeline.Editor
 
         public static void Collapse(params PlayableDirector[] sources)
         {
-            sources = sources.Where(s => s != null && s.playableAsset is TimelineAsset).Distinct().ToArray();
+            sources = sources.Where(s => s != null && s.playableAsset is TimelineAsset).Distinct()
+                .GroupBy(s => s.playableAsset).Select(g => g.First()).ToArray();
             if (sources.Length < 2) return;
             if (!EditorUtility.DisplayDialog("Join Timelines",
                     $"Merge {sources.Length} timelines into one? Sources will be moved to Assets/_TimelineBackups (not deleted).",
@@ -123,6 +131,11 @@ namespace BovineLabs.Timeline.Editor
 
             var first = sources[0];
             var scene = first.gameObject.scene;
+            if (sources.Any(s => s.gameObject.scene != scene))
+            {
+                EditorUtility.DisplayDialog("Join Timelines", "All selected directors must be in the same scene.", "OK");
+                return;
+            }
             if (!EnsureSceneSaved(scene)) return;
 
             Undo.IncrementCurrentGroup();
@@ -191,7 +204,7 @@ namespace BovineLabs.Timeline.Editor
             var dir = go.AddComponent<PlayableDirector>();
             Undo.RegisterCreatedObjectUndo(dir, "Join Timelines");
             dir.playableAsset = merged;
-            CopyDirectorSettings(first, dir);
+            CopyDirectorSettings(first, dir, first.playOnAwake);
 
             foreach (var kv in bindingMap)
                 dir.SetGenericBinding(kv.Key, kv.Value);
@@ -336,11 +349,11 @@ namespace BovineLabs.Timeline.Editor
             }
         }
 
-        private static void CopyDirectorSettings(PlayableDirector src, PlayableDirector dst)
+        private static void CopyDirectorSettings(PlayableDirector src, PlayableDirector dst, bool playOnAwake)
         {
             dst.timeUpdateMode = src.timeUpdateMode;
             dst.extrapolationMode = src.extrapolationMode;
-            dst.playOnAwake = false;
+            dst.playOnAwake = playOnAwake;
             dst.initialTime = src.initialTime;
             dst.time = src.time;
         }
